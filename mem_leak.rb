@@ -73,21 +73,26 @@ end
 def show_gc_stat
   mem = `ps u -p #{Process.pid}|tail -n 1|awk '{print $4}'`.strip
   #puts("[#{Time.now.strftime("%Y%m%d %H:%M:%S")}] #{h_to_s(GC.stat.merge(mem: mem))}")
+  #puts("#{h_to_s(GC.stat.merge(mem: mem))}")
   #puts("  -> #{h_to_s(ObjectSpace.count_objects.select{|k,v| %w(TOTAL FREE T_STRING T_ARRAY T_HASH T_DATA).include?(k.to_s)}.merge(mem: mem)).downcase}")
   #puts("#{h_to_s(ObjectSpace.count_objects.merge(mem: mem)).downcase}")
   puts("mem: #{mem}%")
 end
 
+TEST_QUERY = "SELECT * FROM #{TEST_PG_MEM_LEAK_TABLE_NAME} LIMIT 50000"
 def run_once(pattern)
   ary = []
+
   conn = PGconn.open(PG_DB_CONFIG)
-  result = conn.exec("SELECT * FROM #{TEST_PG_MEM_LEAK_TABLE_NAME} LIMIT 50000")
+  if pattern.to_i < 14
+    result = conn.exec(TEST_QUERY)
+  end
+
   case pattern.to_s
-  #when '0'   # leak - originaly I wanted to do like this
-  #  result.each do |record| # call result.each but do nothing inside block
-  #    ary << convert_record(record)
-  #  end
-  #  return ary
+  when '0'   # leak - originaly I wanted to do like this
+    result.each do |record| # call result.each but do nothing inside block
+        ary << record.values
+    end
   when '1'   # no leak
     result.each do |record| # call result.each but do nothing inside block
     end
@@ -139,6 +144,23 @@ def run_once(pattern)
     1.upto(50000) { ary << {} } # push empty hash outside result.each block
     result.each do |record|
     end
+  when '13'   # leak
+    result.each do |record|
+      ary << {}
+    end
+    result.clear   # call clear
+  when '14'   # no leak! This would be a workaround
+    conn.exec(TEST_QUERY) do |result|
+      ary << {}
+    end
+  when '15'   # leak
+    conn.exec(TEST_QUERY) do |result|
+      ary << result.values
+    end
+  when '16'   # no leak
+    1.upto(50000) do |i|
+      ary << [i, 'aaaaaaaaaa' * 1000]
+    end
   when ''     # no leak
     # Do nothing
   else
@@ -158,7 +180,7 @@ def run_loop(pattern = nil, num_exec = 10)
       puts "---- pattern:#{pattern} cnt:#{cnt}/#{num_exec} running query and start GC"
       run_once(pattern)
     else
-      puts "---- cnt:#{cnt}/#{num_exec} starts only GC"
+      puts "---- pattern:#{pattern} cnt:#{cnt}/#{num_exec} starts only GC"
     end
     GC.start
     show_gc_stat
